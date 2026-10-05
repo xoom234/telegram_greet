@@ -9,3 +9,5 @@ credentials/*.json
 !credentials/.gitkeep
 *.log
 .pytest_cache/
+.vercel
+.env*
