@@ -1,0 +1,12 @@
+.env
+env
+.venv
+credentials
+logs
+deploy
+docs
+tests
+main.py
+build_sklad.py
+*.xlsx
+*.csv

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -15,15 +16,18 @@ _BACKUP_COUNT = 5
 
 
 def setup_logging(level: int = logging.INFO) -> None:
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
-
     root = logging.getLogger()
     root.setLevel(level)
 
     formatter = logging.Formatter(_FORMAT)
 
+    # На Vercel файловая система только для чтения — логи идут в stdout.
+    use_file = not os.getenv("VERCEL")
+    if use_file:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+
     # Не дублируем хендлеры при повторном вызове (например, в тестах).
-    already = any(
+    already = not use_file or any(
         isinstance(h, RotatingFileHandler)
         and Path(getattr(h, "baseFilename", "")).resolve() == LOG_FILE.resolve()
         for h in root.handlers

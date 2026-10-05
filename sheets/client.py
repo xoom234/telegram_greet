@@ -1,6 +1,7 @@
 """Connect to Google Sheets via service account."""
 from __future__ import annotations
 
+import json
 import os
 import re
 from pathlib import Path
@@ -49,7 +50,20 @@ def extract_spreadsheet_id(url_or_id: str) -> str:
     raise RuntimeError(f"Не удалось извлечь ID таблицы из: {url_or_id}")
 
 
+def _credentials_info() -> dict | None:
+    """JSON ключа из переменной GOOGLE_CREDENTIALS_JSON (для хостингов без файлов)."""
+    _load_env()
+    raw = os.getenv("GOOGLE_CREDENTIALS_JSON", "").strip()
+    if not raw:
+        return None
+    return json.loads(raw)
+
+
 def get_client() -> gspread.Client:
+    info = _credentials_info()
+    if info is not None:
+        creds = Credentials.from_service_account_info(info, scopes=SCOPES)
+        return gspread.authorize(creds)
     path = credentials_path()
     if not path.exists():
         raise FileNotFoundError(
@@ -69,8 +83,9 @@ def open_spreadsheet(url_or_id: str | None = None) -> gspread.Spreadsheet:
 
 
 def service_account_email() -> str:
-    import json
-
+    info = _credentials_info()
+    if info is not None:
+        return info["client_email"]
     path = credentials_path()
     data = json.loads(path.read_text(encoding="utf-8"))
     return data["client_email"]

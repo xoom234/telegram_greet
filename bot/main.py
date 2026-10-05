@@ -18,6 +18,17 @@ from bot.middleware import AccessMiddleware
 logger = logging.getLogger(__name__)
 
 
+def build_dispatcher() -> Dispatcher:
+    dp = Dispatcher()
+    dp.message.middleware(AccessMiddleware())
+    dp.callback_query.middleware(AccessMiddleware())
+
+    register_common_handlers(dp)
+    register_movement_handlers(dp)
+    register_report_handlers(dp)
+    return dp
+
+
 async def run() -> None:
     load_dotenv(override=True)
     setup_logging()
@@ -31,13 +42,7 @@ async def run() -> None:
         sys.exit(1)
 
     bot = Bot(token=token)
-    dp = Dispatcher()
-    dp.message.middleware(AccessMiddleware())
-    dp.callback_query.middleware(AccessMiddleware())
-
-    register_common_handlers(dp)
-    register_movement_handlers(dp)
-    register_report_handlers(dp)
+    dp = build_dispatcher()
 
     me = await bot.get_me()
     logger.info("Бот запущен как @%s", me.username)
