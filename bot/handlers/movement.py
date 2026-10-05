@@ -6,18 +6,9 @@ import re
 from datetime import date
 
 from aiogram import Dispatcher, F
-from aiogram.types import (
-    CallbackQuery,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    Message,
-)
+from aiogram.types import CallbackQuery, Message
 
-from bot.formatting import (
-    compute_balances,
-    format_operation_ok,
-    format_overdraft_warning,
-)
+from bot.formatting import compute_balances, format_operation_ok
 from bot.parsing import ParseErr, ParseOk, parse_movement_args, strip_command
 from bot.repository import Operation, append_operation, load_brands, load_packs, read_movements
 
@@ -100,53 +91,34 @@ async def cmd_rashod(message: Message) -> None:
     if ok is None:
         return
 
+    # Расход всегда пишем: вкус остаётся в учёте даже при остатке 0 или минусе.
     movements = await read_movements()
     balances = compute_balances(movements)
     key = (ok.brand, ok.flavor, ok.pack)
-    stock = balances.get(key, 0)
-
-    if stock <= 0 or ok.qty > stock:
-        user_id = message.from_user.id if message.from_user else 0
-        _pending_rashod[user_id] = {
-            "date": ok.date.isoformat(),
-            "brand": ok.brand,
-            "flavor": ok.flavor,
-            "pack": ok.pack,
-            "qty": ok.qty,
-            "author": ok.author,
-            "comment": _tg_comment(message),
-        }
-        kb = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text="Списать всё равно",
-                        callback_data="rashod:confirm",
-                    ),
-                    InlineKeyboardButton(
-                        text="Отмена",
-                        callback_data="rashod:cancel",
-                    ),
-                ]
-            ]
-        )
-        warn = format_overdraft_warning(
-            ok.brand, ok.flavor, ok.pack, stock, ok.qty
-        )
-        if stock <= 0:
-            warn = (
-                f"Такой позиции на складе почти нет (остаток {stock}).\n" + warn
-            )
-        await message.answer(warn, reply_markup=kb)
-        return
+    # case-insensitive lookup for stock hint
+    stock = balances.get(key)
+    if stock is None:
+        for (b, f, p), q in balances.items():
+            if (
+                b.casefold() == ok.brand.casefold()
+                and f.casefold() == ok.flavor.casefold()
+                and p.casefold() == ok.pack.casefold()
+            ):
+                stock = q
+                break
+        else:
+            stock = 0
 
     op = _op_from_ok(ok, "Расход", _tg_comment(message))
     row, doc_no = await append_operation(
         op,
         tg_user_id=message.from_user.id if message.from_user else None,
     )
-    await message.answer(format_operation_ok(op, doc_no=doc_no, row=row))
-
+    text = format_operation_ok(op, doc_no=doc_no, row=row)
+    new_stock = stock - ok.qty
+    if new_stock <= 0:
+        text += f"\nОстаток после списания: {new_stock} (вкус сохранён в учёте)"
+    await message.answer(text)
 
 async def on_rashod_confirm(callback: CallbackQuery) -> None:
     user_id = callback.from_user.id if callback.from_user else 0

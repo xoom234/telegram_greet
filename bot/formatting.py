@@ -60,8 +60,9 @@ def format_stock_report(
     balances: dict[tuple[str, str, str], int],
     *,
     brand_filter: str | None = None,
-    hide_zero: bool = True,
+    hide_zero: bool = False,
 ) -> str:
+    """По умолчанию показываем и нулевые/отрицательные остатки — вкус не пропадает."""
     items = [
         (b, f, p, q)
         for (b, f, p), q in balances.items()
@@ -69,17 +70,10 @@ def format_stock_report(
         and (not hide_zero or q != 0)
     ]
     if brand_filter and not items:
-        # покажем нули тоже, если фильтр задан
-        items = [
-            (b, f, p, q)
-            for (b, f, p), q in balances.items()
-            if b.casefold() == brand_filter.casefold()
-        ]
-        if not items:
-            return f"По бренду «{brand_filter}» позиций нет."
+        return f"По бренду «{brand_filter}» позиций нет."
 
     if not items:
-        return "Склад пуст (нет ненулевых остатков)."
+        return "Склад пуст (нет позиций в накладных)."
 
     items.sort(key=lambda x: (x[0].casefold(), x[1].casefold(), x[2]))
 
