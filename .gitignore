@@ -1,0 +1,11 @@
+.env
+env
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+logs/
+credentials/*.json
+!credentials/.gitkeep
+*.log
+.pytest_cache/
