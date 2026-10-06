@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from aiogram import Bot  # noqa: E402
 from aiogram.types import Update  # noqa: E402
 
+from bot.alerts import notify_admin  # noqa: E402
 from bot.config import load_settings  # noqa: E402
 from bot.logging_setup import setup_logging  # noqa: E402
 from bot.main import build_dispatcher  # noqa: E402
@@ -82,6 +83,7 @@ async def app(scope, receive, send) -> None:
         async with Bot(token=load_settings().bot_token) as bot:
             update = Update.model_validate(json.loads(body), context={"bot": bot})
             await _dp.feed_update(bot, update)
-    except Exception:
+    except Exception as exc:
         logger.exception("Ошибка обработки апдейта")
+        await notify_admin("webhook", exc)
     await _respond(send, 200)

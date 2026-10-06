@@ -11,9 +11,11 @@ from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
+    Update,
     WebAppInfo,
 )
 
+from bot.alerts import notify_admin
 from bot.config import load_settings
 from bot.errors import UserFacingError
 
@@ -57,6 +59,22 @@ async def cmd_help(message: Message) -> None:
     await message.answer(HELP_TEXT)
 
 
+def _update_context(update: Update) -> str:
+    if update.message:
+        user, text = update.message.from_user, update.message.text
+    elif update.callback_query:
+        user, text = update.callback_query.from_user, update.callback_query.data
+    else:
+        user, text = None, None
+    parts = []
+    if user:
+        name = f"@{user.username}" if user.username else user.first_name
+        parts.append(f"Пользователь: {name} (id {user.id})")
+    if text:
+        parts.append(f"Сообщение: {text[:200]}")
+    return "\n".join(parts)
+
+
 async def on_error(event: ErrorEvent) -> bool:
     """Глобальный errors handler: пользователю — короткий текст, в лог — трейсбек."""
     exc = event.exception
@@ -68,6 +86,7 @@ async def on_error(event: ErrorEvent) -> bool:
         text = GENERIC_ERROR_TEXT
 
     update = event.update
+    await notify_admin("бот", exc, _update_context(update))
     try:
         if update.message:
             await update.message.answer(text)

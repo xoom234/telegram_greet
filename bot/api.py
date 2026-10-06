@@ -12,6 +12,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+from bot.alerts import notify_admin
 from bot.config import load_settings
 from bot.errors import UserFacingError
 from bot.formatting import compute_balances, format_operation_ok
@@ -47,11 +48,13 @@ class ValidationError(Exception):
 
 def _user(request: Request) -> WebAppUser:
     settings = load_settings()
-    return authenticate(
+    user = authenticate(
         request.headers.get("authorization"),
         bot_token=settings.bot_token,
         allowed_user_ids=settings.allowed_user_ids,
     )
+    request.scope["tg_user"] = user
+    return user
 
 
 def _movement_json(row: MovementRow) -> dict:
@@ -289,12 +292,23 @@ async def _validation_error(request: Request, exc: ValidationError) -> JSONRespo
     return JSONResponse({"error": "Проверьте поля", "fields": exc.fields}, status_code=422)
 
 
+def _request_context(request: Request) -> str:
+    context = f"{request.method} {request.url.path}"
+    user = request.scope.get("tg_user")
+    if user is not None:
+        name = f"@{user.username}" if user.username else user.first_name
+        context += f"\nПользователь: {name} (id {user.id})"
+    return context
+
+
 async def _user_facing_error(request: Request, exc: UserFacingError) -> JSONResponse:
+    await notify_admin("приложение", exc, _request_context(request))
     return JSONResponse({"error": exc.user_message}, status_code=503)
 
 
 async def _unexpected_error(request: Request, exc: Exception) -> JSONResponse:
     logger.exception("API error %s %s", request.method, request.url.path)
+    await notify_admin("приложение", exc, _request_context(request))
     return JSONResponse({"error": "Внутренняя ошибка сервера"}, status_code=500)
 
 

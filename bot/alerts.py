@@ -1,0 +1,48 @@
+"""Уведомления владельцу об ошибках в Telegram.
+
+На Vercel Hobby логи хранятся час, поэтому всё, что требует внимания,
+дублируется сообщением в личный чат с ботом (ADMIN_CHAT_ID).
+"""
+from __future__ import annotations
+
+import logging
+import time
+import traceback
+
+from aiogram import Bot
+
+from bot.config import load_settings
+
+logger = logging.getLogger(__name__)
+
+REPEAT_SILENCE_SEC = 600
+MAX_TEXT = 3500
+_last_sent: dict[str, float] = {}
+
+
+def _describe(exc: BaseException) -> str:
+    frames = traceback.extract_tb(exc.__traceback__)[-3:]
+    where = "\n".join(f"  {f.filename.rsplit('/', 1)[-1]}:{f.lineno} {f.name}" for f in frames)
+    return f"{type(exc).__name__}: {exc}" + (f"\n{where}" if where else "")
+
+
+async def notify_admin(source: str, exc: BaseException, context: str = "") -> None:
+    """Отправить владельцу сообщение об ошибке. Никогда не бросает исключений."""
+    chat_id = load_settings().admin_chat_id
+    if chat_id is None:
+        return
+    key = f"{source}|{type(exc).__name__}|{exc}"
+    now = time.monotonic()
+    if now - _last_sent.get(key, -REPEAT_SILENCE_SEC) < REPEAT_SILENCE_SEC:
+        return
+    _last_sent[key] = now
+
+    text = f"⚠️ Ошибка: {source}\n"
+    if context:
+        text += f"{context}\n"
+    text += f"\n{_describe(exc)}"
+    try:
+        async with Bot(token=load_settings().bot_token) as bot:
+            await bot.send_message(chat_id, text[:MAX_TEXT])
+    except Exception:
+        logger.warning("Не удалось отправить уведомление об ошибке", exc_info=True)

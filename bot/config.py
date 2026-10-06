@@ -20,6 +20,7 @@ class Settings:
     default_author: str
     cache_ttl: int
     webapp_url: str = DEFAULT_WEBAPP_URL
+    admin_chat_id: int | None = None
 
 
 def _parse_ids(raw: str) -> frozenset[int]:
@@ -56,4 +57,16 @@ def load_settings() -> Settings:
         default_author=default_author,
         cache_ttl=cache_ttl,
         webapp_url=os.getenv("WEBAPP_URL", "").strip() or DEFAULT_WEBAPP_URL,
+        admin_chat_id=_parse_admin(os.getenv("ADMIN_CHAT_ID", "")),
     )
+
+
+def _parse_admin(raw: str) -> int | None:
+    raw = raw.strip()
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning("Некорректный ADMIN_CHAT_ID: %r — уведомления об ошибках выключены", raw)
+        return None
