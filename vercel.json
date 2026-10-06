@@ -1,4 +1,12 @@
 {
+  "installCommand": "cd webapp && npm ci",
+  "buildCommand": "cd webapp && npm run build",
+  "outputDirectory": "webapp/dist",
+  "functions": {
+    "api/*.py": {
+      "excludeFiles": "{webapp/**,tests/**,docs/**,deploy/**}"
+    }
+  },
   "rewrites": [
     { "source": "/api/v1/:path*", "destination": "/api/v1" }
   ]
