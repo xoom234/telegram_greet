@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 from datetime import timedelta
 
+from aiogram import Bot
 from aiogram.utils.web_app import WebAppUser
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -12,7 +13,7 @@ from starlette.routing import Route
 
 from bot.config import load_settings
 from bot.errors import UserFacingError
-from bot.formatting import compute_balances
+from bot.formatting import compute_balances, format_operation_ok
 from bot.repository import (
     MovementRow,
     Operation,
@@ -214,6 +215,27 @@ async def _validate_operation(payload: dict, user: WebAppUser) -> Operation:
     )
 
 
+async def _notify_chat(
+    chat_id: int,
+    op: Operation,
+    *,
+    doc_no: str,
+    row: int,
+    stock_after: int,
+) -> None:
+    """Подтверждение в чат с ботом, чтобы история записей из приложения осталась в Telegram."""
+    text = "Записано через приложение\n\n" + format_operation_ok(op, doc_no=doc_no, row=row)
+    if op.kind == "Расход" and stock_after <= 0:
+        text += f"\nОстаток после списания: {stock_after} (вкус сохранён в учёте)"
+    else:
+        text += f"\nОстаток: {stock_after}"
+    try:
+        async with Bot(token=load_settings().bot_token) as bot:
+            await bot.send_message(chat_id, text)
+    except Exception:
+        logger.warning("Не удалось отправить подтверждение в чат %s", chat_id, exc_info=True)
+
+
 async def create_operation(request: Request) -> JSONResponse:
     user = _user(request)
     try:
@@ -227,6 +249,7 @@ async def create_operation(request: Request) -> JSONResponse:
     before = stock_of(compute_balances(await read_movements()), op.brand, op.flavor, op.pack)
     row, doc_no = await append_operation(op, tg_user_id=user.id)
     after = before + op.qty if op.kind == "Приход" else before - op.qty
+    await _notify_chat(user.id, op, doc_no=doc_no, row=row, stock_after=after)
     return JSONResponse(
         {
             "row": row,

@@ -10,6 +10,8 @@ from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_WEBAPP_URL = "https://telegram-greet-omega.vercel.app/"
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -17,6 +19,7 @@ class Settings:
     allowed_user_ids: frozenset[int]
     default_author: str
     cache_ttl: int
+    webapp_url: str = DEFAULT_WEBAPP_URL
 
 
 def _parse_ids(raw: str) -> frozenset[int]:
@@ -52,4 +55,5 @@ def load_settings() -> Settings:
         allowed_user_ids=allowed,
         default_author=default_author,
         cache_ttl=cache_ttl,
+        webapp_url=os.getenv("WEBAPP_URL", "").strip() or DEFAULT_WEBAPP_URL,
     )

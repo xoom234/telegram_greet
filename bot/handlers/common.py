@@ -6,8 +6,15 @@ import re
 
 from aiogram import Dispatcher, F
 from aiogram.filters import CommandStart
-from aiogram.types import ErrorEvent, Message
+from aiogram.types import (
+    ErrorEvent,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+    WebAppInfo,
+)
 
+from bot.config import load_settings
 from bot.errors import UserFacingError
 
 logger = logging.getLogger(__name__)
@@ -26,8 +33,24 @@ HELP_TEXT = (
 )
 
 
+def open_app_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[
+            InlineKeyboardButton(
+                text="Открыть склад",
+                web_app=WebAppInfo(url=load_settings().webapp_url),
+            )
+        ]]
+    )
+
+
 async def cmd_start(message: Message) -> None:
-    await message.answer("Бот склада запущен.\nНапишите /help — список команд.")
+    await message.answer(
+        "Склад табака: остатки, приход и расход.\n\n"
+        "Нажмите «Открыть склад» или кнопку «Склад» слева от поля ввода. "
+        "Команды по-прежнему работают — список в /help.",
+        reply_markup=open_app_keyboard(),
+    )
 
 
 async def cmd_help(message: Message) -> None:

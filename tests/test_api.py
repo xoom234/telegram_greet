@@ -74,6 +74,22 @@ def repo(monkeypatch):
     monkeypatch.setattr(api, "load_packs", load_packs)
     monkeypatch.setattr(api, "read_movements", read_movements)
     monkeypatch.setattr(api, "append_operation", append_operation)
+
+    class FakeBot:
+        def __init__(self, token):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def send_message(self, chat_id, text):
+            state["sent"].append((chat_id, text))
+
+    state["sent"] = []
+    monkeypatch.setattr(api, "Bot", FakeBot)
     monkeypatch.setattr(api, "today", lambda: date(2026, 10, 5))
     monkeypatch.setattr(
         api,
@@ -206,6 +222,45 @@ def test_create_validation_errors(client, repo):
     assert r.status_code == 422
     assert set(r.json()["fields"]) == {"kind", "brand", "flavor", "pack", "qty", "date"}
     assert repo["appended"] == []
+
+
+def test_create_sends_chat_confirmation(client, repo):
+    client.post(
+        "/api/v1/operations",
+        headers=auth(),
+        json={"kind": "out", "brand": "Сарма классик", "flavor": "Буратино", "pack": "200 г", "qty": 10},
+    )
+    chat_id, text = repo["sent"][0]
+    assert chat_id == 1453663021
+    assert text.startswith("Записано через приложение")
+    assert "Накладная: Н-099" in text
+    assert "Остаток после списания: -4" in text
+
+
+def test_validation_error_sends_nothing(client, repo):
+    client.post("/api/v1/operations", headers=auth(), json={"kind": "in"})
+    assert repo["sent"] == []
+
+
+def test_chat_failure_does_not_break_write(client, repo, monkeypatch):
+    class BrokenBot:
+        def __init__(self, token):
+            pass
+
+        async def __aenter__(self):
+            raise RuntimeError("telegram down")
+
+        async def __aexit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(api, "Bot", BrokenBot)
+    r = client.post(
+        "/api/v1/operations",
+        headers=auth(),
+        json={"kind": "in", "brand": "Darkside", "flavor": "Bounty", "pack": "250 г", "qty": 1},
+    )
+    assert r.status_code == 201
+    assert len(repo["appended"]) == 1
 
 
 def test_create_requires_auth(client, repo):
