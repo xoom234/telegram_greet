@@ -6,9 +6,12 @@ import re
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from bot.repository import load_brands
+from bot.repository import MovementRow, load_brands
 
 DEFAULT_TIMEZONE = "Europe/Samara"
+MAX_QTY = 10_000
+# Записи «на завтра» допустимы: склад и сервер могут жить в разных сутках.
+MAX_DAYS_AHEAD = 1
 
 
 def today() -> date:
@@ -65,6 +68,24 @@ def normalize_pack(raw: str, packs: list[str]) -> str | None:
         if pm and pm.group(1) == grams:
             return p
     return None
+
+
+def is_future(day: date, base: date | None = None) -> bool:
+    return day > (base or today()) + timedelta(days=MAX_DAYS_AHEAD)
+
+
+def canonical_flavor(rows: list[MovementRow], brand: str, flavor: str) -> str:
+    """Написание вкуса, уже встречавшееся у бренда: «red tea» → «Red tea»."""
+    key = flavor.casefold()
+    for row in rows:
+        if row.brand == brand and row.flavor.casefold() == key:
+            return row.flavor
+    return flavor
+
+
+def position_known(rows: list[MovementRow], brand: str, flavor: str, pack: str) -> bool:
+    key = (brand.casefold(), flavor.casefold(), pack.casefold())
+    return any((r.brand.casefold(), r.flavor.casefold(), r.pack.casefold()) == key for r in rows)
 
 
 def stock_of(

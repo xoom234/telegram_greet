@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import timedelta
 
 from aiogram import Bot
 from aiogram.utils.web_app import WebAppUser
@@ -25,12 +24,20 @@ from bot.repository import (
     load_packs,
     read_movements,
 )
-from bot.services import normalize_pack, parse_day, resolve_brand, stock_of, today
+from bot.services import (
+    MAX_QTY,
+    canonical_flavor,
+    is_future,
+    normalize_pack,
+    parse_day,
+    resolve_brand,
+    stock_of,
+    today,
+)
 from bot.webapp_auth import AuthError, authenticate
 
 logger = logging.getLogger(__name__)
 
-MAX_QTY = 10_000
 MAX_TEXT = 100
 REQUEST_ID_RE = re.compile(r"[A-Za-z0-9-]{8,64}")
 KINDS = {
@@ -183,7 +190,7 @@ async def _validate_operation(payload: dict, user: WebAppUser) -> Operation:
     op_date = parse_day(_text(payload, "date"), base)
     if op_date is None:
         errors["date"] = "Непонятная дата. Формат: 04.10.2026 или 2026-10-04"
-    elif op_date > base + timedelta(days=1):
+    elif is_future(op_date, base):
         errors["date"] = "Дата в будущем"
 
     brand_raw = _text(payload, "brand")
@@ -215,11 +222,7 @@ async def _validate_operation(payload: dict, user: WebAppUser) -> Operation:
     if errors:
         raise ValidationError(errors)
 
-    # Тот же вкус в другом регистре не должен давать отдельную позицию на складе.
-    for row in await read_movements():
-        if row.brand == brand and row.flavor.casefold() == flavor.casefold():
-            flavor = row.flavor
-            break
+    flavor = canonical_flavor(await read_movements(), brand, flavor)
 
     uname = f"@{user.username}" if user.username else user.first_name
     return Operation(
