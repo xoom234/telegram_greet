@@ -16,6 +16,7 @@ from bot.alerts import notify_admin
 from bot.config import load_settings
 from bot.errors import UserFacingError
 from bot.formatting import compute_balances, format_operation_ok
+from bot.health import HealthProblem, run_checks
 from bot.repository import (
     MovementRow,
     Operation,
@@ -84,6 +85,19 @@ def _flavors_by_brand(rows: list[MovementRow]) -> dict[str, list[str]]:
 
 async def health(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True})
+
+
+async def status(request: Request) -> JSONResponse:
+    """Для UptimeRobot: 200 если таблица и webhook в порядке, иначе 503."""
+    checks = await run_checks()
+    problems = {name: result for name, result in checks.items() if result != "ok"}
+    if problems:
+        details = "\n".join(f"{name}: {result}" for name, result in problems.items())
+        await notify_admin("мониторинг", HealthProblem(details))
+    return JSONResponse(
+        {"ok": not problems, "checks": checks},
+        status_code=503 if problems else 200,
+    )
 
 
 async def meta(request: Request) -> JSONResponse:
@@ -314,6 +328,7 @@ async def _unexpected_error(request: Request, exc: Exception) -> JSONResponse:
 
 routes = [
     Route("/api/v1/health", health),
+    Route("/api/v1/status", status),
     Route("/api/v1/meta", meta),
     Route("/api/v1/stock", stock),
     Route("/api/v1/operations", list_operations, methods=["GET"]),

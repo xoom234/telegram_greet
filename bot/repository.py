@@ -458,6 +458,14 @@ def _add_brand_sync(name: str) -> int:
     return row
 
 
+async def check_sheet_access() -> None:
+    """Прочитать пару ячеек мимо кэша: проверка доступа к таблице для мониторинга."""
+    await asyncio.to_thread(
+        _run_sheets,
+        lambda: open_spreadsheet().worksheet(SHEET_PACKS).get("A4:A5"),
+    )
+
+
 async def load_brands() -> list[str]:
     return await asyncio.to_thread(_load_brands_sync)
 
