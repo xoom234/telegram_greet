@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import timedelta
 
 from aiogram import Bot
@@ -17,7 +18,7 @@ from bot.formatting import compute_balances, format_operation_ok
 from bot.repository import (
     MovementRow,
     Operation,
-    append_operation,
+    append_operation_once,
     load_brands,
     load_packs,
     read_movements,
@@ -29,6 +30,7 @@ logger = logging.getLogger(__name__)
 
 MAX_QTY = 10_000
 MAX_TEXT = 100
+REQUEST_ID_RE = re.compile(r"[A-Za-z0-9-]{8,64}")
 KINDS = {
     "in": "Приход",
     "приход": "Приход",
@@ -245,11 +247,20 @@ async def create_operation(request: Request) -> JSONResponse:
     if not isinstance(payload, dict):
         return JSONResponse({"error": "Тело запроса должно быть JSON-объектом"}, status_code=400)
 
+    request_id = _text(payload, "request_id") or None
+    if request_id is not None and not REQUEST_ID_RE.fullmatch(request_id):
+        raise ValidationError({"request_id": "Некорректный request_id"})
+
     op = await _validate_operation(payload, user)
     before = stock_of(compute_balances(await read_movements()), op.brand, op.flavor, op.pack)
-    row, doc_no = await append_operation(op, tg_user_id=user.id)
-    after = before + op.qty if op.kind == "Приход" else before - op.qty
-    await _notify_chat(user.id, op, doc_no=doc_no, row=row, stock_after=after)
+    row, doc_no, duplicate = await append_operation_once(
+        op, tg_user_id=user.id, request_id=request_id
+    )
+    if duplicate:
+        after = stock_of(compute_balances(await read_movements()), op.brand, op.flavor, op.pack)
+    else:
+        after = before + op.qty if op.kind == "Приход" else before - op.qty
+        await _notify_chat(user.id, op, doc_no=doc_no, row=row, stock_after=after)
     return JSONResponse(
         {
             "row": row,
@@ -264,8 +275,9 @@ async def create_operation(request: Request) -> JSONResponse:
                 "author": op.author,
             },
             "stock_after": after,
+            "duplicate": duplicate,
         },
-        status_code=201,
+        status_code=200 if duplicate else 201,
     )
 
 

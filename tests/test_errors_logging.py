@@ -62,7 +62,7 @@ async def test_append_logs_line(caplog):
         comment="@x id=123456789",
     )
 
-    with patch("bot.repository._append_operation_sync", return_value=(9, "Н-004")):
+    with patch("bot.repository._append_operation_sync", return_value=(9, "Н-004", False)):
         with caplog.at_level(logging.INFO, logger="bot.repository"):
             row, doc = await append_operation(op, tg_user_id=123456789)
 

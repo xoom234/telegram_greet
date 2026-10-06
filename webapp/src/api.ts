@@ -18,21 +18,34 @@ export class ApiError extends Error {
   }
 }
 
+const TIMEOUT_MS = 25_000;
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   let response: Response;
+  let body: { error?: string; fields?: Record<string, string> };
   try {
     response = await fetch(path, {
       ...init,
+      signal: controller.signal,
       headers: {
         Authorization: `tma ${initData()}`,
         "Content-Type": "application/json",
         ...init.headers,
       },
     });
+    body = await response.json().catch(() => ({}));
   } catch {
-    throw new ApiError(0, "Нет связи с сервером. Проверьте интернет.");
+    throw new ApiError(
+      0,
+      controller.signal.aborted
+        ? "Сервер не ответил вовремя. Проверьте интернет и повторите."
+        : "Нет связи с сервером. Проверьте интернет.",
+    );
+  } finally {
+    clearTimeout(timer);
   }
-  const body = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw new ApiError(
       response.status,

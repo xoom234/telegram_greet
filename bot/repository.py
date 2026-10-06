@@ -31,6 +31,10 @@ SHEET_PACKS = "Фасовки"
 BRANDS_RANGE = "A4:A103"
 PACKS_RANGE = "A4:A23"
 MOVEMENTS_RANGE = "A4:I2000"
+MOVEMENTS_OPEN_RANGE = "A4:I"
+FIRST_DATA_ROW = 4
+REQUEST_MARK = "req="
+DOC_NO_SETTLE_ATTEMPTS = 6
 
 DOC_NO_RE = re.compile(r"^Н-(\d+)$", re.IGNORECASE)
 
@@ -84,11 +88,20 @@ def _norm(value: object) -> str:
     return str(value or "").strip()
 
 
-def _cache_get(entry: tuple[float, list] | None) -> list | None:
+def _movements_cache_ttl() -> int:
+    """Движения пишут бот и API в разных процессах, поэтому кэш короткий."""
+    raw = os.getenv("MOVEMENTS_CACHE_TTL_SECONDS", "10").strip()
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 10
+
+
+def _cache_get(entry: tuple[float, list] | None, ttl: int | None = None) -> list | None:
     if entry is None:
         return None
     ts, data = entry
-    if time.monotonic() - ts > _cache_ttl():
+    if time.monotonic() - ts > (_cache_ttl() if ttl is None else ttl):
         return None
     return data
 
@@ -264,7 +277,7 @@ def _load_packs_sync() -> list[str]:
 
 def _read_movements_sync() -> list[MovementRow]:
     global _cache_movements
-    cached = _cache_get(_cache_movements)
+    cached = _cache_get(_cache_movements, _movements_cache_ttl())
     if cached is not None:
         return list(cached)
 
@@ -298,33 +311,121 @@ def _read_movements_sync() -> list[MovementRow]:
     return list(rows)
 
 
-def _append_operation_sync(op: Operation) -> tuple[int, str]:
-    def _do() -> tuple[int, str]:
-        ws = open_spreadsheet().worksheet(SHEET_MOVEMENTS)
-        row = next_free_row(ws)
-        doc_no = next_doc_no(ws)
-        values = [[
+def _cell_text(value: object) -> str:
+    """Текст для ячейки: без табов/переводов строк и без запуска формул (=, +, -, @)."""
+    text = " ".join(_norm(value).split())
+    return "'" + text if text[:1] in ("=", "+", "-", "@") else text
+
+
+def _cell(raw: list, idx: int) -> str:
+    return _norm(raw[idx]) if idx < len(raw) else ""
+
+
+def _first_free_row(values: list[list]) -> int:
+    for offset, raw in enumerate(values):
+        if not _cell(raw, 2):
+            return FIRST_DATA_ROW + offset
+    return FIRST_DATA_ROW + len(values)
+
+
+def _max_doc_no(values: list[list]) -> int:
+    numbers = [int(m.group(1)) for raw in values if (m := DOC_NO_RE.match(_cell(raw, 1)))]
+    return max(numbers, default=0)
+
+
+def _find_request(values: list[list], request_id: str) -> tuple[int, str] | None:
+    mark = f"{REQUEST_MARK}{request_id}"
+    for offset, raw in enumerate(values):
+        if _cell(raw, 8).endswith(mark):
+            return FIRST_DATA_ROW + offset, _cell(raw, 1)
+    return None
+
+
+def _append_operation_sync(
+    op: Operation,
+    request_id: str | None = None,
+    sheet_name: str = SHEET_MOVEMENTS,
+) -> tuple[int, str, bool]:
+    """Дописать операцию. Возвращает (строка, № накладной, это повтор request_id).
+
+    Пишем не «в первую пустую строку», а вставкой новой строки на её место
+    одним batchUpdate: Google применяет batchUpdate к таблице строго по очереди,
+    поэтому одновременные записи из бота и разных копий API не затирают друг друга.
+    """
+    comment = _norm(op.comment)
+    if request_id:
+        comment = f"{comment} {REQUEST_MARK}{request_id}".strip()
+
+    def _do() -> tuple[int, str, bool]:
+        sh = open_spreadsheet()
+        ws = sh.worksheet(sheet_name)
+        values = ws.get(MOVEMENTS_OPEN_RANGE) or []
+        if request_id and (found := _find_request(values, request_id)):
+            return found[0], found[1], True
+
+        row = _first_free_row(values)
+        doc_no = f"Н-{_max_doc_no(values) + 1:03d}"
+        cells = [
             op.date.strftime("%d.%m.%Y"),
             doc_no,
-            _norm(op.brand),
-            _norm(op.flavor),
-            _norm(op.pack),
-            int(op.qty),
-            _norm(op.kind),
-            _norm(op.author),
-            _norm(op.comment),
-        ]]
-        # gspread 6.x: values первым аргументом, range — вторым
-        ws.update(
-            values,
-            f"A{row}:I{row}",
-            value_input_option="USER_ENTERED",
-        )
-        return row, doc_no
+            _cell_text(op.brand),
+            _cell_text(op.flavor),
+            _cell_text(op.pack),
+            str(int(op.qty)),
+            _cell_text(op.kind),
+            _cell_text(op.author),
+            _cell_text(comment),
+        ]
+        if row == FIRST_DATA_ROW:
+            # Вставка перед первой строкой данных сдвинула бы диапазоны формул «Склада».
+            ws.update([cells], f"A{row}:I{row}", value_input_option="USER_ENTERED")
+            return row, doc_no, False
 
-    row, doc_no = _run_sheets(_do)
+        sh.batch_update({"requests": [
+            {"insertDimension": {
+                "range": {"sheetId": ws.id, "dimension": "ROWS",
+                          "startIndex": row - 1, "endIndex": row},
+                "inheritFromBefore": True,
+            }},
+            {"pasteData": {
+                "coordinate": {"sheetId": ws.id, "rowIndex": row - 1, "columnIndex": 0},
+                "data": "\t".join(cells),
+                "type": "PASTE_NORMAL",
+                "delimiter": "\t",
+            }},
+        ]})
+        return _settle_doc_no(ws, row, doc_no, cells)
+
+    result = _run_sheets(_do)
     _invalidate_movements_cache()
-    return row, doc_no
+    return result
+
+
+def _settle_doc_no(ws, row: int, doc_no: str, cells: list[str]) -> tuple[int, str, bool]:
+    """Уточнить строку и разрулить совпавший № накладной при одновременной записи.
+
+    Если две записи прочитали таблицу одновременно, обе взяли один номер и одну
+    строку; более поздняя вставилась выше. Она и берёт следующий свободный номер.
+    """
+    key = [c.lstrip("'") for c in cells[2:6]]
+    mine = row
+    for _ in range(DOC_NO_SETTLE_ATTEMPTS):
+        values = ws.get(MOVEMENTS_OPEN_RANGE) or []
+        for offset in range(max(0, row - FIRST_DATA_ROW), len(values)):
+            raw = values[offset]
+            if _cell(raw, 1) == doc_no and [_cell(raw, i) for i in range(2, 6)] == key:
+                mine = FIRST_DATA_ROW + offset
+                break
+        same_no_below = any(
+            _cell(raw, 1) == doc_no
+            for raw in values[mine - FIRST_DATA_ROW + 1:]
+        )
+        if not same_no_below:
+            break
+        doc_no = f"Н-{_max_doc_no(values) + 1:03d}"
+        ws.update([[doc_no]], f"B{mine}", value_input_option="USER_ENTERED")
+        logger.warning("Одновременная запись: строке %s выдан номер %s", mine, doc_no)
+    return mine, doc_no, False
 
 
 def _add_brand_sync(name: str) -> int:
@@ -374,9 +475,26 @@ async def append_operation(
     *,
     tg_user_id: int | None = None,
 ) -> tuple[int, str]:
+    row, doc_no, _ = await append_operation_once(op, tg_user_id=tg_user_id)
+    return row, doc_no
+
+
+async def append_operation_once(
+    op: Operation,
+    *,
+    tg_user_id: int | None = None,
+    request_id: str | None = None,
+) -> tuple[int, str, bool]:
+    """Как append_operation, но повтор с тем же request_id не создаёт вторую строку.
+
+    Третий элемент результата — True, если строка уже была записана раньше.
+    """
     async with _write_lock:
-        row, doc_no = await asyncio.to_thread(_append_operation_sync, op)
+        row, doc_no, duplicate = await asyncio.to_thread(_append_operation_sync, op, request_id)
     tg = tg_user_id if tg_user_id is not None else "-"
+    if duplicate:
+        logger.info("APPEND duplicate req=%s row=%s doc=%s tg=%s", request_id, row, doc_no, tg)
+        return row, doc_no, True
     logger.info(
         "APPEND row=%s %s %s/%s/%s qty=%s by=%s tg=%s",
         row,
@@ -388,7 +506,7 @@ async def append_operation(
         _norm(op.author),
         tg,
     )
-    return row, doc_no
+    return row, doc_no, False
 
 
 async def add_brand(name: str) -> int:

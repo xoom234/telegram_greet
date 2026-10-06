@@ -33,6 +33,14 @@ export const haptic = {
   select: () => webApp?.HapticFeedback?.selectionChanged(),
 };
 
+/** Нативное подтверждение Telegram, в браузере — window.confirm. */
+export function confirmDialog(message: string): Promise<boolean> {
+  if (insideTelegram && webApp && webApp.isVersionAtLeast("6.2")) {
+    return new Promise((resolve) => webApp.showConfirm(message, (ok) => resolve(ok)));
+  }
+  return Promise.resolve(window.confirm(message));
+}
+
 export interface MainButtonConfig {
   text: string;
   visible: boolean;

@@ -49,13 +49,15 @@ export interface NewOperation {
   pack: string;
   qty: number;
   author: string;
+  request_id?: string;
 }
 
 export interface CreatedOperation {
   row: number;
   doc_no: string;
-  operation: Omit<NewOperation, "kind"> & { kind: string };
+  operation: Omit<NewOperation, "kind" | "request_id"> & { kind: string };
   stock_after: number;
+  duplicate: boolean;
 }
 
 export interface Prefill {

@@ -65,15 +65,20 @@ def repo(monkeypatch):
     async def read_movements():
         return list(state["rows"])
 
-    async def append_operation(op, *, tg_user_id=None):
+    async def append_operation_once(op, *, tg_user_id=None, request_id=None):
+        if request_id and request_id in state["requests"]:
+            return 99, "Н-099", True
+        if request_id:
+            state["requests"].add(request_id)
         state["appended"].append((op, tg_user_id))
-        return 99, "Н-099"
+        return 99, "Н-099", False
 
+    state["requests"] = set()
     monkeypatch.setattr(api, "load_brands", load_brands)
     monkeypatch.setattr(services, "load_brands", load_brands)
     monkeypatch.setattr(api, "load_packs", load_packs)
     monkeypatch.setattr(api, "read_movements", read_movements)
-    monkeypatch.setattr(api, "append_operation", append_operation)
+    monkeypatch.setattr(api, "append_operation_once", append_operation_once)
 
     class FakeBot:
         def __init__(self, token):
@@ -235,6 +240,31 @@ def test_create_sends_chat_confirmation(client, repo):
     assert text.startswith("Записано через приложение")
     assert "Накладная: Н-099" in text
     assert "Остаток после списания: -4" in text
+
+
+def test_retry_with_same_request_id_writes_once(client, repo):
+    body = {
+        "kind": "in", "brand": "Darkside", "flavor": "Bounty", "pack": "250 г", "qty": 2,
+        "request_id": "a1b2c3d4-e5f6",
+    }
+    first = client.post("/api/v1/operations", headers=auth(), json=body)
+    second = client.post("/api/v1/operations", headers=auth(), json=body)
+    assert first.status_code == 201 and first.json()["duplicate"] is False
+    assert second.status_code == 200 and second.json()["duplicate"] is True
+    assert second.json()["doc_no"] == first.json()["doc_no"]
+    assert len(repo["appended"]) == 1
+    assert len(repo["sent"]) == 1
+
+
+def test_bad_request_id_rejected(client, repo):
+    r = client.post(
+        "/api/v1/operations",
+        headers=auth(),
+        json={"kind": "in", "brand": "Darkside", "flavor": "B", "pack": "250 г", "qty": 1,
+              "request_id": "x; drop"},
+    )
+    assert r.status_code == 422
+    assert "request_id" in r.json()["fields"]
 
 
 def test_validation_error_sends_nothing(client, repo):

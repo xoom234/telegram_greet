@@ -1,12 +1,17 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError } from "../api";
 import { Segmented } from "../components/Segmented";
 import { dmyToIso, humanDate, isoToDmy } from "../dates";
-import { haptic, telegramUserName, useMainButton } from "../tg";
+import { confirmDialog, haptic, telegramUserName, useMainButton } from "../tg";
 import type { CreatedOperation, Kind, Meta, Prefill, StockItem } from "../types";
 
 const AUTHOR_KEY = "sklad.author";
 const MAX_QTY = 10000;
+
+function newRequestId(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+}
 
 function stockOf(items: StockItem[] | null, brand: string, flavor: string, pack: string): number | null {
   if (!items || !brand || !flavor || !pack) return null;
@@ -41,6 +46,7 @@ export function RecordScreen({
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<CreatedOperation | null>(null);
   const [stock, setStock] = useState<StockItem[] | null>(null);
+  const pending = useRef<{ signature: string; id: string } | null>(null);
 
   useEffect(() => {
     api.stock().then((r) => setStock(r.items)).catch(() => setStock(null));
@@ -63,19 +69,33 @@ export function RecordScreen({
 
   const submit = async () => {
     if (!valid || submitting) return;
+    if (kind === "out" && after !== null && after < 0 && current !== null) {
+      haptic.warning();
+      const ok = await confirmDialog(
+        `На складе ${current} шт., а списывается ${qtyNum}. Остаток станет ${after}. Всё равно записать?`,
+      );
+      if (!ok) return;
+    }
+    const payload = {
+      kind,
+      date: isoToDmy(dateIso),
+      brand,
+      flavor: flavor.trim(),
+      pack,
+      qty: qtyNum,
+      author: author.trim(),
+    };
+    // Повторное нажатие после обрыва связи отправит тот же request_id — сервер не создаст дубль.
+    const signature = JSON.stringify(payload);
+    if (pending.current?.signature !== signature) {
+      pending.current = { signature, id: newRequestId() };
+    }
     setSubmitting(true);
     setError(null);
     setFieldErrors({});
     try {
-      const created = await api.create({
-        kind,
-        date: isoToDmy(dateIso),
-        brand,
-        flavor: flavor.trim(),
-        pack,
-        qty: qtyNum,
-        author: author.trim(),
-      });
+      const created = await api.create({ ...payload, request_id: pending.current.id });
+      pending.current = null;
       if (author.trim()) localStorage.setItem(AUTHOR_KEY, author.trim());
       haptic.success();
       setResult(created);
@@ -83,7 +103,11 @@ export function RecordScreen({
     } catch (e) {
       haptic.error();
       const err = e as ApiError;
-      setError(err.message);
+      setError(
+        err.status === 0
+          ? `${err.message} Если запись успела пройти, повторное нажатие не создаст дубль.`
+          : err.message,
+      );
       setFieldErrors(err.fields ?? {});
     } finally {
       setSubmitting(false);
@@ -115,6 +139,9 @@ export function RecordScreen({
           <p className="hint">
             Накладная {result.doc_no} · строка {result.row}
           </p>
+          {result.duplicate && (
+            <p className="hint">Эта запись уже прошла раньше — второй строки не появилось.</p>
+          )}
         </div>
         <div className="list">
           <div className="row static"><span className="row-label">Бренд</span><span>{op.brand}</span></div>
@@ -271,7 +298,11 @@ export function RecordScreen({
           {after !== null && (
             <span className={after <= 0 ? "minus-text" : ""}>
               После записи: {after}
-              {after <= 0 && kind === "out" ? " — вкус останется в учёте" : ""}
+              {kind === "out" && after < 0
+                ? " — списываете больше, чем есть"
+                : kind === "out" && after === 0
+                  ? " — вкус останется в учёте"
+                  : ""}
             </span>
           )}
         </div>
