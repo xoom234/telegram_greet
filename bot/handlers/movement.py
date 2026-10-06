@@ -11,6 +11,7 @@ from aiogram.types import CallbackQuery, Message
 from bot.formatting import compute_balances, format_operation_ok
 from bot.parsing import ParseErr, ParseOk, parse_movement_args, strip_command
 from bot.repository import Operation, append_operation, load_brands, load_packs, read_movements
+from bot.services import stock_of, today
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +61,7 @@ async def _parse_or_reply(message: Message, usage: str) -> ParseOk | None:
         return None
     brands = await load_brands()
     packs = await load_packs()
-    result = parse_movement_args(args, brands=brands, packs=packs)
+    result = parse_movement_args(args, brands=brands, packs=packs, today=today())
     if isinstance(result, ParseErr):
         await message.answer(result.message + "\n\n" + usage)
         return None
@@ -93,21 +94,7 @@ async def cmd_rashod(message: Message) -> None:
 
     # Расход всегда пишем: вкус остаётся в учёте даже при остатке 0 или минусе.
     movements = await read_movements()
-    balances = compute_balances(movements)
-    key = (ok.brand, ok.flavor, ok.pack)
-    # case-insensitive lookup for stock hint
-    stock = balances.get(key)
-    if stock is None:
-        for (b, f, p), q in balances.items():
-            if (
-                b.casefold() == ok.brand.casefold()
-                and f.casefold() == ok.flavor.casefold()
-                and p.casefold() == ok.pack.casefold()
-            ):
-                stock = q
-                break
-        else:
-            stock = 0
+    stock = stock_of(compute_balances(movements), ok.brand, ok.flavor, ok.pack)
 
     op = _op_from_ok(ok, "Расход", _tg_comment(message))
     row, doc_no = await append_operation(
