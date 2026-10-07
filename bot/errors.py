@@ -14,11 +14,15 @@ class UserFacingError(Exception):
         super().__init__(user_message)
 
 
-class SheetBusyError(UserFacingError):
+class TemporaryError(UserFacingError):
+    """Разовый сбой внешнего сервиса: проходит сам, владельцу о нём не сообщаем."""
+
+
+class SheetBusyError(TemporaryError):
     """Google API вернул 429 / исчерпан лимит после retry."""
 
 
-class SheetNetworkError(UserFacingError):
+class SheetNetworkError(TemporaryError):
     """Нет сети или таймаут при обращении к таблице."""
 
 

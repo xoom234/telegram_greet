@@ -5,19 +5,35 @@
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 import traceback
 
 from aiogram import Bot
+from aiogram.exceptions import TelegramNetworkError, TelegramRetryAfter, TelegramServerError
 
 from bot.config import load_settings
+from bot.errors import TemporaryError
 
 logger = logging.getLogger(__name__)
 
 REPEAT_SILENCE_SEC = 600
 MAX_TEXT = 3500
 _last_sent: dict[str, float] = {}
+
+TEMPORARY_ERRORS = (
+    TemporaryError,
+    TelegramNetworkError,
+    TelegramRetryAfter,
+    TelegramServerError,
+    asyncio.TimeoutError,
+    TimeoutError,
+)
+
+
+def is_temporary(exc: BaseException) -> bool:
+    return isinstance(exc, TEMPORARY_ERRORS)
 
 
 def _describe(exc: BaseException) -> str:
@@ -27,7 +43,14 @@ def _describe(exc: BaseException) -> str:
 
 
 async def notify_admin(source: str, exc: BaseException, context: str = "") -> None:
-    """Отправить владельцу сообщение об ошибке. Никогда не бросает исключений."""
+    """Отправить владельцу сообщение об ошибке. Никогда не бросает исключений.
+
+    Разовые сбои Google и Telegram только пишутся в лог: пользователь уже получил
+    «повторите», а длительный простой заметит UptimeRobot.
+    """
+    if is_temporary(exc):
+        logger.warning("Разовый сбой (%s), без уведомления: %s", source, exc)
+        return
     chat_id = load_settings().admin_chat_id
     if chat_id is None:
         return

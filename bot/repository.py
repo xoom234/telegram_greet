@@ -129,6 +129,10 @@ def _is_rate_limit(exc: APIError) -> bool:
     return False
 
 
+def _is_server_error(exc: APIError) -> bool:
+    return exc.code in (500, 502, 503, 504)
+
+
 def _is_access_denied(exc: BaseException) -> bool:
     if isinstance(exc, SpreadsheetNotFound):
         return True
@@ -152,6 +156,8 @@ def _service_email_safe() -> str | None:
 def _map_sheets_error(exc: BaseException) -> Exception:
     if isinstance(exc, APIError) and _is_rate_limit(exc):
         return SheetBusyError("Таблица занята, повторите")
+    if isinstance(exc, APIError) and _is_server_error(exc):
+        return SheetNetworkError("Google Таблицы временно не отвечают, повторите")
     if _is_access_denied(exc):
         return SheetAccessError(sheet_access_message(_service_email_safe()))
     if isinstance(
@@ -171,10 +177,11 @@ def _run_sheets(fn: Callable[[], T]) -> T:
         try:
             return fn()
         except APIError as exc:
-            if _is_rate_limit(exc) and attempt < len(_RETRY_DELAYS_SEC):
+            if (_is_rate_limit(exc) or _is_server_error(exc)) and attempt < len(_RETRY_DELAYS_SEC):
                 delay = _RETRY_DELAYS_SEC[attempt]
                 logger.warning(
-                    "Google API 429/лимит, повтор через %.0f с (попытка %s/%s)",
+                    "Google API %s, повтор через %.0f с (попытка %s/%s)",
+                    exc.code,
                     delay,
                     attempt + 1,
                     len(_RETRY_DELAYS_SEC),
@@ -183,8 +190,8 @@ def _run_sheets(fn: Callable[[], T]) -> T:
                 attempt += 1
                 continue
             mapped = _map_sheets_error(exc)
-            if isinstance(mapped, SheetBusyError):
-                logger.error("Google API лимит исчерпан после retry: %s", exc)
+            if isinstance(mapped, (SheetBusyError, SheetNetworkError)):
+                logger.error("Google API не ответил после retry: %s", exc)
             elif isinstance(mapped, SheetAccessError):
                 logger.exception("Нет доступа к Google Таблице", exc_info=exc)
             else:

@@ -60,6 +60,26 @@ async def test_same_error_is_not_repeated(setup):
     assert len(FakeBot.sent) == 2
 
 
+async def test_temporary_failures_are_not_sent(setup):
+    import asyncio
+
+    from aiogram.exceptions import TelegramNetworkError
+
+    from bot.errors import SheetAccessError, SheetBusyError, SheetNetworkError
+
+    for exc in (
+        SheetBusyError("Таблица занята, повторите"),
+        SheetNetworkError("Не могу подключиться к таблице"),
+        TelegramNetworkError(method=None, message="timeout"),
+        asyncio.TimeoutError(),
+    ):
+        await alerts.notify_admin("бот", exc)
+    assert FakeBot.sent == []
+
+    await alerts.notify_admin("бот", SheetAccessError("Нет доступа к таблице"))
+    assert len(FakeBot.sent) == 1
+
+
 async def test_disabled_without_admin(setup):
     setup["admin"] = None
     await alerts.notify_admin("бот", boom())

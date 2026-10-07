@@ -96,14 +96,13 @@ async def health(request: Request) -> JSONResponse:
 
 async def status(request: Request) -> JSONResponse:
     """Для UptimeRobot: 200 если таблица и webhook в порядке, иначе 503."""
-    checks = await run_checks()
-    problems = {name: result for name, result in checks.items() if result != "ok"}
-    if problems:
-        details = "\n".join(f"{name}: {result}" for name, result in problems.items())
+    report = await run_checks()
+    if report.serious:
+        details = "\n".join(f"{name}: {result}" for name, result in report.serious.items())
         await notify_admin("мониторинг", HealthProblem(details))
     return JSONResponse(
-        {"ok": not problems, "checks": checks},
-        status_code=503 if problems else 200,
+        {"ok": report.ok, "checks": report.checks},
+        status_code=200 if report.ok else 503,
     )
 
 

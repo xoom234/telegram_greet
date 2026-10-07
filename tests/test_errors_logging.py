@@ -37,6 +37,26 @@ def test_run_sheets_retries_429_then_busy():
     assert [c.args[0] for c in sleep_mock.call_args_list] == [1.0, 2.0, 4.0]
 
 
+def test_run_sheets_retries_google_5xx():
+    calls = {"n": 0}
+
+    def flaky():
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise _api_error(503, "The service is currently unavailable", "UNAVAILABLE")
+        return "ok"
+
+    with patch("bot.repository.time.sleep"):
+        assert _run_sheets(flaky) == "ok"
+
+    def down():
+        raise _api_error(500, "Internal error", "INTERNAL")
+
+    with patch("bot.repository.time.sleep"):
+        with pytest.raises(SheetNetworkError, match="временно не отвечают"):
+            _run_sheets(down)
+
+
 def test_run_sheets_network_message():
     from requests.exceptions import ConnectionError as RequestsConnectionError
 
